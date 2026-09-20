@@ -3,11 +3,12 @@ import numpy as np
 import cv2
 from paddleocr import PaddleOCR
 import re
+from difflib import SequenceMatcher
 
 courseCodes = [
     # First year (Sem I & II)
     "MAC01", "PHC01", "CYC01", "XEC01", "ESC01", "BTC01", "HSC01",
-    "MAC02", "CSC01", "ECC01", "EEC01",
+    "MAC02", "CSC01", "XEC02", "CSC02",
 
     # Biotechnology
     "MAC331", "CHC331", "BTC301", "BTC302", "BTC303",
@@ -72,6 +73,14 @@ courseCodes = [
     "CYC801", "CYC802", "CYC803",
 ]
 
+def getCodeFallback(ambgCode: str):
+    scores = [SequenceMatcher(None, ambgCode, code).ratio() for code in courseCodes]
+    bestIndex = scores.index(max(scores))
+    if scores[bestIndex] < 0.75:
+        return None
+    return courseCodes[bestIndex]
+
+
 def cropImage(img):
     # Crop top 30% of the page
     h, w = img.shape[:2]
@@ -85,12 +94,55 @@ def getMetaData(img):
 
     blob = " ".join(result['rec_texts'])
 
-    metaData = dict.fromkeys(["year", "semester", "term", "code"])
+    metaData = dict.fromkeys(["year", "semester", "term", "code", "review"], None)
+    metaData["review"] = False
     #we are concerned with rec_texts attribute
     # print(result, result.keys())
     print(blob)
-    match = re.search(r'\b\d{4}-\d{2}\b', blob)
-    print(match['match'].split("-")[0])  # type: ignore
+
+    # check for year
+    yearM = re.search(r'\b\d{4}-\d{2}\b', blob)
+    if yearM:
+        metaData['year'] = yearM.group().split("-")[0]
+    else:
+        metaData['review'] = True
+
+    # check for code
+    codeRex = "|".join(courseCodes)
+    codeM = re.search(rf'{codeRex}', blob)
+    if codeM:
+        metaData['code'] = codeM.group()
+    else:
+        fbCodeRex = re.search(r'\b[A-Za-z]{3}\d{2,3}\b', blob)
+        if fbCodeRex == None:
+            metaData['review'] = True
+        
+        else:
+            fbCode = getCodeFallback(fbCodeRex.group())
+            if fbCode == None:
+                metaData['review'] = True
+            else:
+                metaData['code'] = fbCode
+
+
+    # check for term
+    termM = re.search(r'(?i)\b(?:mid[-\s]?term|end[-\s]?term)\b', blob).group() # type: ignore
+    if termM:
+        metaData['term'] = termM[:3].lower()+"sem"
+    else:
+        metaData['review'] = True
+
+    # getting sem from the subject code
+    if metaData['code']:
+        if (len(metaData['code'])) == 6:
+            metaData['semester'] = int(metaData['code'][3])
+        else:
+             metaData['semester'] = int(metaData['code'][-1])
+    else:
+        metaData['review'] = True
+
+
+    print(metaData)
 
     
 
@@ -111,7 +163,7 @@ def processImage(doc):
     return croppedImage
 
         
-doc = pymupdf.open("targets/image_clean.pdf")
+doc = pymupdf.open("targets/image_warped1.pdf")
 getMetaData(processImage(doc))
 
 

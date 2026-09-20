@@ -4,6 +4,7 @@
 # Python cache
 __pycache__/
 *.py[cod]
+tempCodeRunnerFile.py
 
 # Environment variables
 .env
