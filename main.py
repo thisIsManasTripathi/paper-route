@@ -2,7 +2,7 @@ import pymupdf
 import numpy as np
 import cv2
 from paddleocr import PaddleOCR
-import re
+import re, os
 from difflib import SequenceMatcher
 
 courseCodes = [
@@ -73,6 +73,11 @@ courseCodes = [
     "CYC801", "CYC802", "CYC803",
 ]
 
+midtermMarks = 25
+endtermMarks = 60
+
+depFromCode = {'chc':'che', 'cec':'cve', 'btc':'bt', 'eec':'ee', 'csc':'cse', 'mmc':'mme', 'ecc':'ece', 'mec':'me'}
+
 def getCodeFallback(ambgCode: str):
     scores = [SequenceMatcher(None, ambgCode, code).ratio() for code in courseCodes]
     bestIndex = scores.index(max(scores))
@@ -80,6 +85,29 @@ def getCodeFallback(ambgCode: str):
         return None
     return courseCodes[bestIndex]
 
+
+def getTermFallback(blob):
+    #first fallback for simple spelling mistake
+    termRex = re.search(r'\b[A-Za-z]{3}-[A-Za-z]{3,4}\b', blob)
+    if termRex:
+        termM = termRex.group().lower()
+        if 'end' in termM:
+            return 'endsem'
+        elif 'mid' in termM:
+            return 'midsem'
+    else:
+        termRex = re.search(r'Full\s*Marks\s*:\s*(\d+)', blob, re.I)
+        #what the above beautiful line does is..it captures Full Marks (with any number of space and \n around and in btw it and ignoring caps)
+        #and the () around digits create a group which can be captured separately
+        if termRex:
+            marks = int(termRex.group(1))
+            match(marks):
+                case endtermMarks if marks==endtermMarks:
+                    return 'endsem'
+                case midtermMarks if marks==midtermMarks:
+                    return 'midsem'
+                
+        return None
 
 def cropImage(img):
     # Crop top 30% of the page
@@ -126,26 +154,28 @@ def getMetaData(img):
 
 
     # check for term
-    termM = re.search(r'(?i)\b(?:mid[-\s]?term|end[-\s]?term)\b', blob).group() # type: ignore
+    termM = re.search(r'(?i)\b(?:mid[-\s]?term|end[-\s]?term)\b', blob) # type: ignore
     if termM:
-        metaData['term'] = termM[:3].lower()+"sem"
+        metaData['term'] = termM.group()[:3].lower()+"sem" # type: ignore
     else:
-        metaData['review'] = True
+        termM = getTermFallback(blob)
+        if termM:
+            metaData['term'] = termM
+        else:
+            metaData['review'] = True
 
     # getting sem from the subject code
     if metaData['code']:
         if (len(metaData['code'])) == 6:
-            metaData['semester'] = int(metaData['code'][3])
+            metaData['semester'] = int(metaData['code'][3]) #first letter after the three digits
         else:
              metaData['semester'] = int(metaData['code'][-1])
     else:
         metaData['review'] = True
 
-
     print(metaData)
-
-    
-
+    return metaData
+                                                         
 
 def processImage(doc):
     page = doc[0]
@@ -162,9 +192,33 @@ def processImage(doc):
     croppedImage = cropImage(img)
     return croppedImage
 
-        
-doc = pymupdf.open("targets/image_warped1.pdf")
-getMetaData(processImage(doc))
+
+def getPathFromMData(metaData: dict, REPO_DIR: str):
+
+    if metaData['review'] == True: 
+        return 'review/'
+
+    dep = code =  ''
+    if metaData['semester'] in [1,2]:
+        dep = 'common'
+    else:
+        codeAlpha = metaData['code'][:3].lower()
+        dep = depFromCode[codeAlpha]
+    print(metaData["code"])
+    codeRex = re.search(r'([a-z]{3})(\d+)', metaData["code"], re.I)
+
+    code = codeRex.group(1)[:-1].lower() + codeRex.group(2)  # type: ignore
+
+    print(f'{dep}/sem{metaData['semester']}/{code}/{metaData['term']}/{metaData['year']}.pdf')
+    
+
+         
+for i in os.listdir("./targets"):
+    print(i)
+    file = f"targets/{i}"
+    doc = pymupdf.open(file)
+    metaData = getMetaData(processImage(doc))
+    getPathFromMData(metaData, '')
 
 
 
